@@ -16,7 +16,7 @@ def brute_force_zip(zip_file, max_len=8, charset=string.ascii_lowercase + string
             password = ''.join(guess)
             if extract_zip(zip_file, password):
                 return password
-file_name = "Lostlife_v1.52_mod.zip"
+file_name = "(file name)"
 
 candidate_password = ["hgames18s, hgamesI8s, hgamesl8s, hgames|8s"]
 for pwd in candidate_password:
@@ -28,4 +28,5 @@ for pwd in candidate_password:
         if found_password:
             print(f"Password found: {found_password}")
         else:
+
             print("Password not found.")
