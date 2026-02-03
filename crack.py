@@ -18,7 +18,7 @@ def brute_force_zip(zip_file, max_len=8, charset=string.ascii_lowercase + string
                 return password
 file_name = "(file name)"
 
-candidate_password = ["hgames18s, hgamesI8s, hgamesl8s, hgames|8s"]
+candidate_password = ["possibility word"]
 for pwd in candidate_password:
     if extract_zip(file_name, pwd):
         break
@@ -30,3 +30,4 @@ for pwd in candidate_password:
         else:
 
             print("Password not found.")
+
