@@ -123,8 +123,8 @@ int main(int argc, char **argv)
     if (argc<3)
     {
         printf("Usage:\n");
-        printf("%s file.zip -w wordlist.txt\n", argv[0]);
-        printf("%s file.zip -b luds 1 6\n", argv[0]);
+        printf("%s file.zip -w wordlist.txt (for guesst paswd)\n", argv[0]);
+        printf("%s file.zip -b luds (start letter) (last letters) (l=lower case, u=upper case, d=digits, s=slecial char)\n", argv[0]);
         return 1;
     }
     const char *zip_path = argv[1];
