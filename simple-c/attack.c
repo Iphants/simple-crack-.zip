@@ -2,20 +2,21 @@
 #include "charset.h"
 #include "password.h"
 #include "attack.h"
+#include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <zip.h>
-#include <pthread.h>
 #include <errno.h>
+#include <signal.h>
+#include <stdatomic.h>
 
 /* Shared state for brute-force threads */
-static volatile int found = 0;
+static atomic_int found = 0;
 static char found_pwd[MAX_PWD];
-static pthread_mutex_t found_mutex = PTHREAD_MUTEX_INITIALIZER;
-static unsigned long long total_attempts = 0;
-static pthread_mutex_t attempts_mutex = PTHREAD_MUTEX_INITIALIZER;
+static atomic_ullong total_attempts = 0;
+static volatile sig_atomic_t stop_requested = 0;
 
 typedef struct {
     const char *zip_path;
@@ -27,6 +28,12 @@ typedef struct {
     int thread_id;
     unsigned long long attempts;
 } thread_args;
+
+static void sigint_handler (int sig)
+{
+    (void)sig;
+    stop_requested = 1;
+}
 
 static void *brute_force_thread(void *arg)
 {
@@ -58,34 +65,29 @@ static void *brute_force_thread(void *arg)
     unsigned long long attempts = 0;
     unsigned long long progress = 0;
 
-    for (int len = min_len; len <= max_len && !found; len++)
+    for (int len = min_len; len <= max_len && atomic_load(&found) == 0 && !stop_requested; len++)
     {
         unsigned long long total_combinations = 1;
         for (int i = 0; i < len; i++)
             total_combinations *= (unsigned long long)clen;
 
-        for (unsigned long long idx = start; idx < total_combinations && !found; idx += step)
+        for (unsigned long long idx = start; idx < total_combinations && atomic_load(&found) == 0 && !stop_requested; idx += step)
         {
             attempts++;
             progress++;
             index_to_password(pwd, idx, charset, len);
 
-            if ((attempts % 0xFFF)==0)
+            if ((attempts % ATTEMPT_CHUNK)==0)
             {
-                pthread_mutex_lock(&attempts_mutex);
-                total_attempts += 0x1000;
-                pthread_mutex_unlock(&attempts_mutex);
+            atomic_fetch_add(&total_attempts, ATTEMPT_CHUNK);
             }
             if (try_password(za, pwd))
             {
-                pthread_mutex_lock(&found_mutex);
-                if (!found)
+                if (atomic_exchange(&found, 1) == 0)
                 {
-                    found = 1;
                     strncpy(found_pwd, pwd, MAX_PWD - 1);
                     found_pwd[MAX_PWD - 1] = '\0';
                 }
-                pthread_mutex_unlock(&found_mutex);
                 break;
             }
             if (progress % 10000 == 0)
@@ -96,9 +98,11 @@ static void *brute_force_thread(void *arg)
         }
     }
 
-    pthread_mutex_lock(&attempts_mutex);
-    total_attempts += attempts;
-    pthread_mutex_unlock(&attempts_mutex);
+    unsigned long long remainder = attempts % ATTEMPT_CHUNK;
+    if (remainder)
+    {
+        atomic_fetch_add(&total_attempts, remainder);
+    }
     targ->attempts = attempts;
     zip_close(za);
     return NULL;
@@ -120,6 +124,7 @@ void dictionary_attack(const char *zip_path, const char *wordlist, int threads)
         zip_close(za);
         return;
     }
+    signal (SIGINT, sigint_handler);
 
     char pwd[MAX_PWD];
     unsigned long long attempts = 0;
@@ -127,7 +132,7 @@ void dictionary_attack(const char *zip_path, const char *wordlist, int threads)
 
     printf("Dictionary attack (threads: %d)\n", threads);
 
-    while (fgets(pwd, sizeof(pwd), fp))
+    while (fgets(pwd, sizeof(pwd), fp) && !stop_requested)
     {
         pwd[strcspn(pwd, "\r\n")] = '\0';
         if (!pwd[0])
@@ -147,8 +152,11 @@ void dictionary_attack(const char *zip_path, const char *wordlist, int threads)
             return;
         }
     }
-
-    printf("\nPassword tidak ketemu di wordlist\n");
+    if (stop_requested)
+    {
+        printf("\nAttack stop requested by user\n");
+    }
+    printf("\nPassword not found in wordlist\n");
     fclose(fp);
     zip_close(za);
 }
@@ -160,16 +168,18 @@ void brute_force(const char *zip_path, const char *charset, int min_len, int max
 
     printf("Multi-thread brute force started (%d threads)\n", threads);
     printf("File: %s\n", zip_path);
-    printf("Charset (panjang: %zu)\n", strlen(charset));
+    printf("Charset length: %zu\n", strlen(charset));
     printf("Panjang: %d-%d\n", min_len, max_len);
     printf("Total kombinasi: %llu\n", total_combination);
+    printf("Press ctrl+c to stop...\n\n");
 
-    found = 0;
-    total_attempts = 0;
+    signal(SIGINT, sigint_handler);
+    atomic_store(&found, 0);
+    atomic_store(&total_attempts, 0);
     memset(found_pwd, 0, sizeof(found_pwd));
 
-    pthread_t *thread_ids = malloc (sizeof(pthread_t) * threads);
-    thread_args *args = malloc (sizeof(thread_args) * threads);
+    platform_thread_t **thread_ids = malloc(sizeof(platform_thread_t*) * threads);
+    thread_args *args = malloc(sizeof(thread_args) * threads);
     if (!thread_ids || !args)
     {
         fprintf (stderr, "Error allocating thread structures\n");
@@ -188,30 +198,28 @@ void brute_force(const char *zip_path, const char *charset, int min_len, int max
         args[i].max_len = max_len;
         args[i].thread_id = i;
         args[i].attempts = 0;
-        pthread_create(&thread_ids[i], NULL, brute_force_thread, &args[i]);
+        platform_thread_create(&thread_ids[i], (platform_thread_func_t)brute_force_thread, &args[i]);
     }
 
     for (int i = 0; i < threads; i++)
-        pthread_join(thread_ids[i], NULL);
-
+        platform_thread_join(thread_ids[i], NULL);
     double elapsed = difftime(time(NULL), start);
 
-    if (found)
+    if (atomic_load(&found))
         printf("Password ketemu: %s\n", found_pwd);
     else
         printf("Password tidak ketemu\n");
 
-    printf("Total kombinasi: %llu\n", total_attempts);
+    printf("Total kombinasi: %llu\n", atomic_load(&total_attempts));
     printf("Waktu dibutuhkan: %.2f detik\n", elapsed);
     if (elapsed > 0)
-        printf("Kecepatan: %.0f pwd/detik\n", total_attempts / elapsed);
+        printf("Kecepatan: %.0f pwd/detik\n", atomic_load(&total_attempts) / elapsed);
 
     printf("Threads digunakan: %d\n", threads);
     printf("Statistik thread:\n");
     unsigned long long total_thread_attempt = 0;
     for (int i = 0; i < threads; i++)
     {
-        printf("  Thread %d: %llu percobaan\n", i, args[i].attempts);
         total_thread_attempt += args[i].attempts;
     }
     if (total_thread_attempt != total_attempts)
@@ -244,35 +252,35 @@ void human_brute_force (const char *zip_path, int threads)
     };
     int num_strategies = sizeof(human_behavior)/sizeof(human_behavior[0]);
 
-    printf("human patter brute-force: (user range: %d %d)\n", min_len, max_len);
+    printf("human patter brute-force attack\n");
     printf("File: %s\n\n", zip_path);
-    found = 0;
-    total_attempts = 0;
+    atomic_store(&found, 0);
+    atomic_store(&total_attempts, 0);
     memset (found_pwd, 0, sizeof(found_pwd));
 
     for (int s=0; s < num_strategies;s++)
     {
         char charset [256];
         if (build_charset_from_spec(charset, human_behavior[s].charset_spec) !=0)
-        continue;
+            continue;
 
         printf("mimicry %d/%d: %s (charset: %s)\n", s+1, num_strategies, human_behavior[s].description, human_behavior[s].charset_spec);
         brute_force(zip_path, charset, human_behavior[s].min_len, human_behavior[s].max_len, threads);
 
-        if (found)
-        break;
+        if (atomic_load(&found))
+            break;
         printf("not found with this method\n\n");
+    }
 
-        double elapsedd = difftime(time(NULL), start);
-        if (found)
-        {
-            printf("\n passwd found: %s\n", found_pwd);
-            printf("total time: %.2f second\n", elapsedd);
-        }
-        else
-        {
-            printf("\n passwd not found in any method\n");
-            printf("\n total time: %.2f second\n", elapsedd);
-        }
+    double elapsed = difftime(time(NULL), start);
+    if (atomic_load(&found))
+    {
+        printf("\npasswd found: %s\n", found_pwd);
+        printf("total time: %.2f second\n", elapsed);
+    }
+    else
+    {
+        printf("\npasswd not found in any method\n");
+        printf("total time: %.2f second\n", elapsed);
     }
 }

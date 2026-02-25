@@ -1,8 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
-
 #define MAX_PWD 64
 #define PROGRESS_INTERVAL 100000
 #define NUM_THREADS 8
-
+#define ATTEMPT_CHUNK 4096ULL
 #endif

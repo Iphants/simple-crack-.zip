@@ -1,6 +1,5 @@
 #ifndef PASSWORD_H
 #define PASSWORD_H
-
 #include <zip.h>
 
 int try_password(struct zip *za, const char *pwd);

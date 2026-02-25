@@ -1,10 +1,10 @@
 #include "config.h"
 #include "charset.h"
 #include "attack.h"
+#include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 static void usage(const char *prog)
 {
@@ -31,9 +31,9 @@ static void usage(const char *prog)
 
 static int get_default_threads(void)
 {
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    int n = platform_get_cpu_count();
     if (n < 1) return 1;
-    return (int)n;
+    return n;
 }
 
 int main(int argc, char **argv)
@@ -92,17 +92,17 @@ int main(int argc, char **argv)
             human_behavior = 1;
         }
     }
-    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    long cores = platform_get_cpu_count();
 
     if (wordlist)
     {
-        printf("Threads used: %d (%ld cores detected)\n", threads, cores);
+        printf("Threads used: %d (%d cores detected)\n", threads, cores);
         dictionary_attack(zip_path, wordlist, threads);
         return 0;
     }
     if (human_behavior)
     {
-        printf("Thread used: %d (%ld cores detected)\n", threads, cores);
+        printf("Thread used: %d (%d cores detected)\n", threads, cores);
         human_brute_force (zip_path, threads);
         return 0;
     }
@@ -124,7 +124,7 @@ int main(int argc, char **argv)
             return 1;
         }
 
-        printf("Threads used:%d (%ld cores detected)\n", threads, cores);
+        printf("Threads used:%d (%d cores detected)\n", threads, cores);
         brute_force(zip_path, charset, bf_min, bf_max, threads);
         return 0;
     }
